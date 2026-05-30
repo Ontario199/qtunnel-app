@@ -1272,12 +1272,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final bool active = info?.isActive ?? false;
+    final bool expired = info != null && !info.isActive;
     final DateTime? expire = info?.expire;
     final bool expiresSoon =
         active &&
         expire != null &&
         expire.difference(DateTime.now()) <= const Duration(days: 3);
-    final bool showPlans = !active;
+    final bool showPlans = !active && !expired;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
@@ -1317,7 +1318,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 '«Открыть в приложении», и ключ подключится автоматически.',
           ),
         const SizedBox(height: 24),
-        if (expiresSoon) ...<Widget>[
+        if (expired) ...<Widget>[
+          const Text(
+            'Подписка закончилась',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.2,
+              color: Color(0xFF4A4A68),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _RenewSubscriptionCard(daysLeft: 0, expired: true, onTap: _openStore),
+        ] else if (expiresSoon) ...<Widget>[
           const Text(
             'Скоро закончится',
             style: TextStyle(
@@ -1454,10 +1467,15 @@ class _NoSubscriptionStoreCard extends StatelessWidget {
 }
 
 class _RenewSubscriptionCard extends StatelessWidget {
-  const _RenewSubscriptionCard({required this.daysLeft, required this.onTap});
+  const _RenewSubscriptionCard({
+    required this.daysLeft,
+    required this.onTap,
+    this.expired = false,
+  });
 
   final int daysLeft;
   final VoidCallback onTap;
+  final bool expired;
 
   @override
   Widget build(BuildContext context) {
@@ -1492,20 +1510,24 @@ class _RenewSubscriptionCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const Row(
+              Row(
                 children: <Widget>[
                   Icon(
-                    Icons.hourglass_bottom,
-                    color: Color(0xFFA78BFA),
+                    expired
+                        ? Icons.lock_clock_outlined
+                        : Icons.hourglass_bottom,
+                    color: const Color(0xFFA78BFA),
                     size: 20,
                   ),
-                  SizedBox(width: 10),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Пора продлить подписку',
+                      expired
+                          ? 'Подписка закончилась'
+                          : 'Пора продлить подписку',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: const TextStyle(
                         color: kText,
                         fontSize: 17,
                         fontWeight: FontWeight.w900,
@@ -1524,17 +1546,30 @@ class _RenewSubscriptionCard extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
                   children: <InlineSpan>[
-                    const TextSpan(text: 'До конца подписки '),
-                    TextSpan(
-                      text: 'осталось $daysLeft $dayWord',
-                      style: const TextStyle(
-                        color: Color(0xFFA78BFA),
-                        fontWeight: FontWeight.w900,
+                    if (expired) ...<InlineSpan>[
+                      const TextSpan(
+                        text: 'Подписка закончилась',
+                        style: TextStyle(
+                          color: Color(0xFFA78BFA),
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
-                    ),
-                    const TextSpan(
-                      text: '. Продлите подписку, чтобы доступ не прервался.',
-                    ),
+                      const TextSpan(
+                        text: '. Продлите ее, чтобы снова подключиться к VPN.',
+                      ),
+                    ] else ...<InlineSpan>[
+                      const TextSpan(text: 'До конца подписки '),
+                      TextSpan(
+                        text: 'осталось $daysLeft $dayWord',
+                        style: const TextStyle(
+                          color: Color(0xFFA78BFA),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const TextSpan(
+                        text: '. Продлите подписку, чтобы доступ не прервался.',
+                      ),
+                    ],
                   ],
                 ),
               ),
