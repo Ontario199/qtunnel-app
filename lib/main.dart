@@ -1308,8 +1308,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onBotTap: _openBot,
           title: info?.title,
         ),
-        if (!active) const SizedBox(height: 18),
-        if (!active)
+        if (!active && !expired) const SizedBox(height: 18),
+        if (!active && !expired)
           const _SubscriptionHint(
             icon: Icons.lock_outline,
             title: 'Подписка не активна',
