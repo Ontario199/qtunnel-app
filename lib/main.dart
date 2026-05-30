@@ -19,11 +19,13 @@ import 'package:url_launcher/url_launcher.dart';
 const String kStoreUrl = 'https://store.qtunnel.ru/#plans';
 const String kDashboardUrl = 'https://store.qtunnel.ru/dashboard';
 const String kTelegramBotUrl = 'https://t.me/QTunnel_Bot';
+const bool kPlayStoreBuild = bool.fromEnvironment('QTUNNEL_PLAY_STORE');
 
 // Ключи локального хранилища.
 const String kPrefsSubscriptionKey = 'subscription_url';
 const String kPrefsServerKey = 'selected_server';
 const String kPrefsSessionStartKey = 'session_start_ms';
+const String kPrefsVpnDisclosureAcceptedKey = 'vpn_disclosure_accepted';
 
 // Нативный аварийный стоп Android VpnService, если обычный stop не подтвердился.
 const MethodChannel kVpnControlChannel = MethodChannel('qtunnel/vpn_control');
@@ -464,6 +466,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<bool> _ensureVpnDisclosureAccepted() async {
+    if (!kPlayStoreBuild) return true;
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(kPrefsVpnDisclosureAcceptedKey) ?? false) return true;
+    if (!mounted) return false;
+
+    final bool accepted =
+        await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              backgroundColor: kCard,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              title: const Text(
+                'VPN-подключение',
+                style: TextStyle(color: kText, fontWeight: FontWeight.w900),
+              ),
+              content: const Text(
+                'QTunnel создает системный VPN-туннель, чтобы направлять сетевой трафик через выбранный сервер. Продолжайте только если доверяете своей подписке и серверу.',
+                style: TextStyle(
+                  color: Color(0xFFB8ACCC),
+                  fontSize: 14,
+                  height: 1.35,
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  style: FilledButton.styleFrom(backgroundColor: kViolet),
+                  child: const Text('Понятно'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (accepted) {
+      await prefs.setBool(kPrefsVpnDisclosureAcceptedKey, true);
+    }
+    return accepted;
+  }
+
   Future<void> _loadSubscription() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String? saved = prefs.getString(kPrefsSubscriptionKey);
@@ -838,6 +893,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       await _initFuture;
 
+      final bool disclosureOk = await _ensureVpnDisclosureAccepted();
+      if (!disclosureOk) return;
+
       final bool vpnOk = await _vpn.requestVpnPermission();
       if (!vpnOk) throw 'Разрешение на VPN не выдано';
       await _vpn.requestNotificationPermission();
@@ -991,6 +1049,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openStore() async {
+    if (kPlayStoreBuild) {
+      _setTab(0);
+      return;
+    }
     final bool ok = await launchUrl(
       Uri.parse(kStoreUrl),
       mode: LaunchMode.externalApplication,
@@ -1219,7 +1281,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         importing: _importingSubscription,
                         onImport: _importSubscriptionFromConnectInput,
                         onPaste: _pasteSubscriptionToConnectInput,
-                        onStoreTap: _openStore,
+                        onStoreTap: kPlayStoreBuild ? null : _openStore,
                       ),
                     ),
                   ),
@@ -1248,7 +1310,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 26),
           _NoSubscriptionStoreCard(
-            onStoreTap: _openStore,
+            onStoreTap: kPlayStoreBuild ? null : _openStore,
             onConnectTap: () => _setTab(0),
           ),
         ],
@@ -1278,7 +1340,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         active &&
         expire != null &&
         expire.difference(DateTime.now()) <= const Duration(days: 3);
-    final bool showPlans = !active && !expired;
+    final bool showPlans = !kPlayStoreBuild && !active && !expired;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
@@ -1305,17 +1367,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             setState(() => _devicesExpanded = !_devicesExpanded);
           },
           onManageDevices: _openDashboard,
-          onBotTap: _openBot,
+          onBotTap: kPlayStoreBuild ? null : _openBot,
           title: info?.title,
         ),
         if (!active && !expired) const SizedBox(height: 18),
         if (!active && !expired)
-          const _SubscriptionHint(
+          _SubscriptionHint(
             icon: Icons.lock_outline,
             title: 'Подписка не активна',
-            text:
-                'Выберите тариф на сайте. После оплаты нажмите '
-                '«Открыть в приложении», и ключ подключится автоматически.',
+            text: kPlayStoreBuild
+                ? 'Если у вас уже есть ключ подписки, добавьте его на экране подключения.'
+                : 'Выберите тариф на сайте. После оплаты нажмите '
+                      '«Открыть в приложении», и ключ подключится автоматически.',
           ),
         const SizedBox(height: 24),
         if (expired) ...<Widget>[
@@ -1329,7 +1392,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
-          _RenewSubscriptionCard(daysLeft: 0, expired: true, onTap: _openStore),
+          _RenewSubscriptionCard(
+            daysLeft: 0,
+            expired: true,
+            playStoreBuild: kPlayStoreBuild,
+            onTap: _openStore,
+          ),
         ] else if (expiresSoon) ...<Widget>[
           const Text(
             'Скоро закончится',
@@ -1343,6 +1411,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 12),
           _RenewSubscriptionCard(
             daysLeft: expire.difference(DateTime.now()).inDays.clamp(0, 3),
+            playStoreBuild: kPlayStoreBuild,
             onTap: _openStore,
           ),
         ] else if (showPlans) ...<Widget>[
@@ -1377,7 +1446,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: TextStyle(fontSize: 12, color: Color(0xFF4A4A68)),
             ),
           ),
-        ] else
+        ] else if (!kPlayStoreBuild)
           _OpenStoreButton(onTap: _openStore),
       ],
     );
@@ -1390,7 +1459,7 @@ class _NoSubscriptionStoreCard extends StatelessWidget {
     required this.onConnectTap,
   });
 
-  final VoidCallback onStoreTap;
+  final VoidCallback? onStoreTap;
   final VoidCallback onConnectTap;
 
   @override
@@ -1434,8 +1503,10 @@ class _NoSubscriptionStoreCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Купите подписку на сайте или вставьте уже готовый ключ на экране подключения.',
+            Text(
+              onStoreTap == null
+                  ? 'Если у вас уже есть ключ подписки, добавьте его на экране подключения.'
+                  : 'Купите подписку на сайте или вставьте уже готовый ключ на экране подключения.',
               style: TextStyle(
                 color: Color(0xFF7B7397),
                 fontSize: 13,
@@ -1444,8 +1515,10 @@ class _NoSubscriptionStoreCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 18),
-            _LargeStoreButton(onTap: onStoreTap),
-            const SizedBox(height: 10),
+            if (onStoreTap != null) ...<Widget>[
+              _LargeStoreButton(onTap: onStoreTap!),
+              const SizedBox(height: 10),
+            ],
             Center(
               child: TextButton(
                 onPressed: onConnectTap,
@@ -1471,11 +1544,13 @@ class _RenewSubscriptionCard extends StatelessWidget {
     required this.daysLeft,
     required this.onTap,
     this.expired = false,
+    this.playStoreBuild = false,
   });
 
   final int daysLeft;
   final VoidCallback onTap;
   final bool expired;
+  final bool playStoreBuild;
 
   @override
   Widget build(BuildContext context) {
@@ -1524,7 +1599,9 @@ class _RenewSubscriptionCard extends StatelessWidget {
                     child: Text(
                       expired
                           ? 'Подписка закончилась'
-                          : 'Пора продлить подписку',
+                          : (playStoreBuild
+                                ? 'Срок подписки заканчивается'
+                                : 'Пора продлить подписку'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -1554,8 +1631,10 @@ class _RenewSubscriptionCard extends StatelessWidget {
                           fontWeight: FontWeight.w900,
                         ),
                       ),
-                      const TextSpan(
-                        text: '. Продлите ее, чтобы снова подключиться к VPN.',
+                      TextSpan(
+                        text: playStoreBuild
+                            ? '. Добавьте новый ключ подписки на экране подключения.'
+                            : '. Продлите ее, чтобы снова подключиться к VPN.',
                       ),
                     ] else ...<InlineSpan>[
                       const TextSpan(text: 'До конца подписки '),
@@ -1574,11 +1653,18 @@ class _RenewSubscriptionCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              _LargeStoreButton(
-                label: 'Продлить подписку',
-                icon: Icons.autorenew,
-                onTap: onTap,
-              ),
+              if (playStoreBuild)
+                _LargeStoreButton(
+                  label: 'Добавить ключ',
+                  icon: Icons.add_link,
+                  onTap: onTap,
+                )
+              else
+                _LargeStoreButton(
+                  label: 'Продлить подписку',
+                  icon: Icons.autorenew,
+                  onTap: onTap,
+                ),
             ],
           ),
         ),
@@ -2105,7 +2191,7 @@ class _NoSubscriptionConnectCard extends StatelessWidget {
   final bool importing;
   final VoidCallback onImport;
   final VoidCallback onPaste;
-  final VoidCallback onStoreTap;
+  final VoidCallback? onStoreTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2223,16 +2309,18 @@ class _NoSubscriptionConnectCard extends StatelessWidget {
                 onTap: importing ? null : onImport,
               ),
             ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: _InlineActionButton(
-                icon: Icons.shopping_cart_outlined,
-                label: 'Купить',
-                primary: true,
-                onTap: onStoreTap,
+            if (onStoreTap != null) ...<Widget>[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: _InlineActionButton(
+                  icon: Icons.shopping_cart_outlined,
+                  label: 'Купить',
+                  primary: true,
+                  onTap: onStoreTap,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -2727,7 +2815,7 @@ class _SubscriptionCabinetCard extends StatelessWidget {
   final String? deviceLimitText;
   final VoidCallback onDevicesToggle;
   final VoidCallback onManageDevices;
-  final VoidCallback onBotTap;
+  final VoidCallback? onBotTap;
   final String? title;
 
   @override
@@ -2771,8 +2859,10 @@ class _SubscriptionCabinetCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              _BotPillButton(onTap: onBotTap),
+              if (onBotTap != null) ...<Widget>[
+                const SizedBox(width: 10),
+                _BotPillButton(onTap: onBotTap!),
+              ],
             ],
           ),
           if (title != null && title!.isNotEmpty) ...<Widget>[
