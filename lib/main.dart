@@ -274,6 +274,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _ticker;
   Timer? _startupSplashTimer;
   Timer? _subscriptionRefreshTimer;
+  Timer? _connectingWatchdog;
   DateTime? _sessionStart;
   Duration _sessionDuration = Duration.zero;
 
@@ -392,11 +393,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() => _state = s);
     unawaited(_setQuickTileConnected(s == VpnConnectionState.connected));
     if (s == VpnConnectionState.connected) {
+      _cancelConnectingWatchdog();
       unawaited(_restoreOrStartSessionTimer());
+    } else if (s == VpnConnectionState.connecting) {
+      _startConnectingWatchdog();
     } else {
+      _cancelConnectingWatchdog();
       unawaited(_clearPersistedSessionStart());
       _resetSessionTimer();
     }
+  }
+
+  void _startConnectingWatchdog() {
+    _connectingWatchdog ??= Timer(const Duration(seconds: 45), () {
+      if (!mounted || _state != VpnConnectionState.connecting) return;
+      unawaited(_recoverStuckConnecting());
+    });
+  }
+
+  void _cancelConnectingWatchdog() {
+    _connectingWatchdog?.cancel();
+    _connectingWatchdog = null;
+  }
+
+  Future<void> _recoverStuckConnecting() async {
+    log('VPN слишком долго в connecting, выполняем force stop');
+    if (mounted) setState(() => _busy = false);
+    await _forceStopVpnService();
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+    _onStateChanged(VpnConnectionState.disconnected);
+    _showError('Подключение зависло после потери сети. VPN остановлен.');
   }
 
   Future<void> _restoreOrStartSessionTimer() async {
@@ -766,6 +793,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _ticker?.cancel();
     _startupSplashTimer?.cancel();
     _subscriptionRefreshTimer?.cancel();
+    _connectingWatchdog?.cancel();
     _connectSubscriptionController.dispose();
     _stateSub?.cancel();
     _linkSub?.cancel();
@@ -776,7 +804,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool get _isConnected => _state == VpnConnectionState.connected;
   bool get _isConnecting => _state == VpnConnectionState.connecting;
   bool get _isDisconnecting => _state == VpnConnectionState.disconnecting;
-  bool get _isRuntimeBusy => _busy || _isConnecting || _isDisconnecting;
+  bool get _isRuntimeBusy => _busy || _isDisconnecting;
 
   Future<void> _toggle() async {
     if (_busy) return;
@@ -1225,10 +1253,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 18),
           _ConnectButton(
             connected: _isConnected && !_busy,
+            connecting: _isConnecting,
             busy: _isRuntimeBusy,
             statusLabel: _isDisconnecting
                 ? 'ОТКЛЮЧЕНИЕ'
-                : (_busy && _isConnected ? 'ОТКЛЮЧЕНИЕ' : null),
+                : (_isConnecting
+                      ? 'ПОДКЛЮЧЕНИЕ'
+                      : (_busy && _isConnected ? 'ОТКЛЮЧЕНИЕ' : null)),
             sessionTime: (_isConnected && !_busy)
                 ? _formatDuration(_sessionDuration)
                 : null,
@@ -3593,6 +3624,7 @@ class _PlanTileState extends State<_PlanTile>
 class _ConnectButton extends StatefulWidget {
   const _ConnectButton({
     required this.connected,
+    required this.connecting,
     required this.busy,
     required this.statusLabel,
     required this.sessionTime,
@@ -3600,6 +3632,7 @@ class _ConnectButton extends StatefulWidget {
   });
 
   final bool connected;
+  final bool connecting;
   final bool busy;
   final String? statusLabel;
   final String? sessionTime;
@@ -3620,7 +3653,9 @@ class _ConnectButtonState extends State<_ConnectButton>
   @override
   void initState() {
     super.initState();
-    _activity = (widget.connected || widget.busy) ? 1.0 : 0.0;
+    _activity = (widget.connected || widget.connecting || widget.busy)
+        ? 1.0
+        : 0.0;
   }
 
   @override
@@ -3633,7 +3668,7 @@ class _ConnectButtonState extends State<_ConnectButton>
   Widget build(BuildContext context) {
     final bool connected = widget.connected;
     final bool busy = widget.busy;
-    final bool active = connected || busy;
+    final bool active = connected || widget.connecting || busy;
 
     return GestureDetector(
       onTap: busy ? null : widget.onTap,
